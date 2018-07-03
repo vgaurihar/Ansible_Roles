@@ -1,0 +1,110 @@
+---
+# 1. Below playbook performs mysql_api_master server configuration on remote machine 
+# 2. No manual changes are required in this playbook
+# 3. all variables in this playbook reffers to /etc/ansible/vars/main.yml - this playbook does below tasks
+# 4. install mysql 5.5 server 
+# 5. update root password and allow remote root access 
+# 6. create nfvcontroller database
+# 7. create neccessory users 
+# 8. copy and populate existing nfvcontroller.sql present on roles/mysql_api_master/files/
+# 9. copy my.cnf.j2 template for modifying my.cnf parameters & setting up as api db master
+#10. Enable replication with MysqlAPI_Slave_User
+#11. also please do not change sequence of below configuration.
+
+  - name: install coreutils=8.21 & mysql-server-5.5 & python-mysqldb=1.2.3 packages required to prepare mysql_api_master server.
+    apt: pkg={{ item }} state=installed
+    with_items:
+      - coreutils=8.21-1ubuntu5.1
+      - mysql-server-5.5
+      - python-mysqldb=1.2.3-2ubuntu1
+
+  - name: allow root access to any hosts
+    mysql_user: 
+     login_user: root 
+     login_password: "{{ api_mysql_root_password }}"
+     name: root 
+     password: "{{ api_mysql_root_password }}"
+     host: '%' 
+     check_implicit_admin: yes 
+     priv: "*.*:ALL,GRANT"
+
+  - name: allow root access to localhost
+    mysql_user:
+     login_user: root
+     login_password: "{{ api_mysql_root_password }}"
+     name: root
+     password: "{{ api_mysql_root_password }}"
+     host: localhost
+     check_implicit_admin: yes 
+     priv: "*.*:ALL,GRANT"
+
+  - name: Create a new nfv_controller database
+    mysql_db: 
+     login_user: root 
+     login_password: "{{ api_mysql_root_password }}"
+     name: nfv_controller 
+     state: present
+
+  - name: Ensure MySQL users are present.
+    mysql_user: 
+     login_user: root 
+     login_password: "{{ api_mysql_root_password }}"
+     name: "{{ item.name }}"
+     host: "{{ item.host }}"
+     priv: "{{ item.priv }}"
+     password: "{{ item.password }}"
+     state: present
+    with_items: api_mysql_users
+
+  - name: ensure anonymous users are not present in the database
+    mysql_user: 
+     login_user: root 
+     login_password: "{{ api_mysql_root_password }}" 
+     name: '' 
+     state: absent
+
+  - name: ensure passwordless root users are not present in the database
+    mysql_user:
+     login_user: root
+     login_password: "{{ api_mysql_root_password }}"
+     name: root
+     password: ''
+     state: absent
+
+  - name: Copy nfv_controller.sql dataset on remote api servers on /tmp path 
+    copy: src={{ item }} dest=/tmp
+    with_items:
+     - nfv_controller.sql
+ 
+  - name: Import nfv_controller.sql database
+    mysql_db: 
+     login_user: root 
+     login_password: "{{ api_mysql_root_password }}"
+     name: nfv_controller 
+     state: import 
+     target: "/tmp/nfv_controller.sql"
+
+  - name: copy nfv_controller_sqlimport.sql on /home/{{ ansible_ssh_user }}/ path
+    template: src=nfv_controller_sqlimport.sql.j2 dest=/home/{{ ansible_ssh_user }}/nfv_controller_sqlimport.sql owner={{ ansible_ssh_user }} group={{ ansible_ssh_user }}
+
+  - name: update nfv_controller database
+    mysql_db:
+     login_user: root
+     login_password: "{{ api_mysql_root_password }}"
+     name: nfv_controller
+     state: import
+     target: /home/{{ ansible_ssh_user }}/nfv_controller_sqlimport.sql
+
+  - name: Enable Replication on mysql_api_master server
+    mysql_user: 
+     login_user: root 
+     login_password: "{{ api_mysql_root_password }}"
+     name: "{{ api_mysql_slave_user }}"
+     host: '%' 
+     password: "{{ api_mysql_slave_password }}"
+     priv: "*.*:ALL,GRANT"
+     state: present
+
+  - name: modify mysql_api_master my.cnf parameters using my.cnf.j2 template
+    template: src=mysql_api_master_my.cnf.j2 dest=/etc/mysql/my.cnf backup=yes
+    notify: restart mysql

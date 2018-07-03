@@ -1,0 +1,68 @@
+---
+# 1. Below playbook performs jbpm servers configuration on remote machine
+# 2. No manual changes are required in this playbook
+# 3. all variables in this playbook reffers to /etc/ansible/vars/main.yml - this playbook does below tasks
+# 4. setup ant path in /etc/profile
+# 5. copy "apache-ant-1.9.4.tar.gz" & "jbpm-installer.tar.gz"on remote jbpm servers on /usr/local path and extract
+# 6. Create symlink to /usr/local/apache-ant-1.9.4/ to /usr/local/ant
+# 7. copy jbpm templates standalone-full-wildfly-8.1.0.Final.xml, standalone-full.xml, standalone-wildfly-8.1.0.Final.xml, standalone.xml these templates have been preconfigured and variable mentioned in templates  reffers to /etc/ansible/vars/main.yml
+# 8. start jbpm
+# 9. also please do not change sequence of below configuration.
+
+  - name: install coreutils=8.21 & mysql-client=5.5.46 & openjdk-7-jre & openjdk-7-jdk packages required for jbpm server configuration 
+    apt: pkg={{ item }} state=installed
+    with_items:
+    - coreutils=8.21-1ubuntu5.1
+    - mysql-client=5.5.46-0ubuntu0.14.04.2
+    - openjdk-7-jre
+    - openjdk-7-jdk
+
+  - name: Setup ANT PATH in /etc/profile using template profile.j2
+    template: src=profile.j2 dest=/etc/profile
+
+  - name: copy apache-ant-1.9.4.tar.gz archeve on remote jbpm servers on /usr/local path 
+    copy: src="apache-ant-1.9.4.tar.gz" dest="/usr/local/" owner={{ ansible_ssh_user }} group={{ ansible_ssh_user }}
+
+  - name: extract apache-ant-1.9.4.tar.gz on /usr/local path
+    command: chdir=/usr/local tar xvf /usr/local/apache-ant-1.9.4.tar.gz -C /usr/local/ creates=/usr/local/apache-ant-1.9.4
+
+  - name: copy jbpm-installer.tar.gz archieve  on remote jbpm servers on /usr/local path
+    copy: src="jbpm-installer.tar.gz" dest="/usr/local/" owner={{ ansible_ssh_user }} group={{ ansible_ssh_user }}
+  
+  - name: extract /usr/local/jbpm-installer.tar.gz archieve on /usr/local/ path
+    command: chdir=/usr/local tar xvf /usr/local/jbpm-installer.tar.gz -C /usr/local/ creates=/usr/local/jbpm-installer
+
+  - name: change the ownership of /usr/local/apache-ant-1.9.4/ to {{ ansible_ssh_user }}
+    file: path=/usr/local/apache-ant-1.9.4/ owner={{ ansible_ssh_user }} group={{ ansible_ssh_user }} state=directory recurse=yes
+
+  - name: change the ownership of /usr/local/jbpm-installer  to {{ ansible_ssh_user }}
+    file: path=/usr/local/jbpm-installer owner={{ ansible_ssh_user }} group={{ ansible_ssh_user }} state=directory recurse=yes
+
+  - name: Create symlink /usr/local/ant --> /usr/local/apache-ant-1.9.4/ on jbpm servers
+    file: src=/usr/local/apache-ant-1.9.4 dest=/usr/local/ant owner={{ ansible_ssh_user }} group={{ ansible_ssh_user }} state=link
+ 
+  - name: create /etc/rc.local from template
+    template: src=rc.local.j2 dest=/etc/rc.local backup=yes
+
+  - name: modify jbpm parameters in standalone-full-wildfly-8.1.0.Final.xml using template
+    template: src=standalone-full-wildfly-8.1.0.Final.xml.j2 dest=/usr/local/jbpm-installer/standalone-full-wildfly-8.1.0.Final.xml 
+
+  - name: modify jbpm parameters in standalone-full.xml using template
+    template: src=standalone-full.xml.j2 dest=/usr/local/jbpm-installer/wildfly-8.1.0.Final/standalone/configuration/standalone-full.xml 
+
+  - name: modify jbpm parameters in standalone-wildfly-8.1.0.Final.xml  using template
+    template: src=standalone-wildfly-8.1.0.Final.xml.j2 dest=/usr/local/jbpm-installer/standalone-wildfly-8.1.0.Final.xml 
+
+  - name: modify jbpm parameters in standalone.xml using template 
+    template: src=standalone.xml.j2 dest=/usr/local/jbpm-installer/wildfly-8.1.0.Final/standalone/configuration/standalone.xml 
+
+  - name: source /etc/profile
+    shell: source /etc/profile
+    args:
+     executable: /bin/bash
+
+  - name: add sudoers configuration for jbpm process autostartup using template 
+    template: src=sudoers.j2 dest=/etc/sudoers
+
+  - name: start jbpm proces
+    command: su root -c "/usr/local/ant/bin/ant start.demo.noeclipse -buildfile /usr/local/jbpm-installer/build.xml"

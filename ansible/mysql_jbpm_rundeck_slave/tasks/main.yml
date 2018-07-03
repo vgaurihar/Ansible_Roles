@@ -1,0 +1,109 @@
+---
+
+# 1. Below playbook performs mysql_jbpm_ruundeck_slave server configuration on remote machine
+# 2. No manual changes are required in this playbook
+# 3. all variables in this playbook reffers to /etc/ansible/vars/main.yml - this playbook does below tasks
+# 4. install mysql 5.5 server
+# 5. update root password and allow localhost root accesas
+# 6. create jbpm and rundeck databases
+# 7. create neccessory users
+# 8. copy my.cnf template for modifying my.cnf parameters & setting up as mysql slave server
+# 9. Enable replication with jbpm_rundeck_mysql_slave_user 
+#10. set cron for rundeck backup
+#11. also please do not change sequence of below configuration.
+
+  - name: install coreutils=8.21 & mysql-server-5.5 & python-mysqldb=1.2.3 & nfs-kernel-server=1:1.2.8 packages required for mysql_jbpm_rundeck_slave configuration
+    apt: pkg={{ item }} state=installed
+    with_items:
+      - coreutils=8.21-1ubuntu5.1
+      - mysql-server-5.5
+      - python-mysqldb=1.2.3-2ubuntu1
+      - nfs-kernel-server=1:1.2.8-6ubuntu1.2
+
+  - name: allow root access to any hosts 
+    mysql_user:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: root
+     password: "{{ jbpm_rundeck_mysql_root_password }}"
+     host: '%'
+     check_implicit_admin: yes
+     priv: "*.*:ALL,GRANT"
+
+  - name: allow root access to localhost
+    mysql_user:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: root
+     password: "{{ jbpm_rundeck_mysql_root_password }}"
+     host: localhost
+     check_implicit_admin: yes
+     priv: "*.*:ALL,GRANT"
+
+  - name: Create a new jbpm & rundeck databases
+    mysql_db:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: "{{ item }}"
+     state: present
+    with_items:
+     - jbpm
+     - rundeck
+
+  - name: Ensure MySQL users required for jbpm & rundeck DB access are present.
+    mysql_user:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: "{{ item.name }}"
+     host: "{{ item.host }}"
+     priv: "{{ item.priv }}"
+     password: "{{ item.password }}"
+     state: present
+    with_items: jbpm_rundeck_mysql_users
+
+  - name: ensure anonymous users are not present in the database
+    mysql_user:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: ''
+     state: absent
+
+  - name: ensure passwordless root users are not present in the database
+    mysql_user:
+     login_user: root
+     login_password: "{{ api_mysql_root_password }}"
+     name: root 
+     password: ''
+     state: absent
+
+  - name: modify slave my.cnf parameters using template 
+    template: src=mysql_jbpm_rundeck_slave_my.cnf.j2 dest=/etc/mysql/my.cnf backup=yes
+    notify: restart mysql
+
+  - name: Get the current mysql_jbpm_rundeck_master server replication status
+    mysql_replication: mode=getmaster login_user={{ jbpm_rundeck_mysql_slave_user }} login_password={{ jbpm_rundeck_mysql_slave_password }} login_host={{ mysql_jbpm_rundeck01_eth1 }}
+    register: repl_stat
+
+  - name: set replication on mysql_jbpm_rundeck_slave hosts.
+    mysql_replication: 
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     mode: changemaster 
+     master_host: "{{ mysql_jbpm_rundeck01_eth1 }}"
+     master_user: "{{ jbpm_rundeck_mysql_slave_user }}"
+     master_password: "{{ jbpm_rundeck_mysql_slave_password }}"
+     master_log_file: "{{ repl_stat.File }}"
+     master_log_pos: "{{ repl_stat.Position }}"
+
+  - name: start_replication on mysql_jbpm_rundeck_slave hosts.
+    mysql_replication: 
+     mode: startslave 
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}" 
+
+  - name: restart nfs on mysql_jbpm_rundeck_slave hosts.
+    template: src=exports.j2 dest=/etc/exports backup=yes
+    notify: restart nfs
+
+  - name: setup cron-job on mysql_jbpm_rundeck_slave hosts for copying mysql_jbpm_rundeck_master:/mnt/log to mysql_jbpm_rundeck_slave:/mnt
+    cron: name="Rundeck backup from mysql_jbpm_rundeck_master" minute="0" hour="*/12" user="root" job="/usr/bin/rsync -ratlz --rsh=\"/usr/bin/sshpass -p {{ ansible_ssh_pass }} ssh -o StrictHostKeyChecking=no -l {{ ansible_ssh_user }}\" {{ mysql_jbpm_rundeck01_eth1 }}:/mnt/log  /mnt/"

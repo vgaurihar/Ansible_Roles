@@ -1,0 +1,95 @@
+---
+# 1. Below playbook performs rundeck_jbpm_db_master server configuration on remote machine
+# 2. No manual changes are required in this playbook
+# 3. all variables in this playbook reffers to /etc/ansible/main.yml - this playbook does below tasks
+# 4. install mysql 5.5 server
+# 5. update root password and allow remote root access
+# 6. create jbpm and rundeck databases
+# 7. create neccessory users
+# 8. copy my.cnf template for modifying my.cnf parameters & setting up as rundeck_jbpm db master
+# 9. Enable replication with MysqlJBPMRundeck_Slave_User
+#10. setup NFS share for central rundeck logging & start NFS
+#11. also please do not change sequence of below configuration.
+
+  - name: install coreutils=8.21 & mysql-server-5.5 & python-mysqldb=1.2.3 & nfs-kernel-server=1:1.2.8 packages required for mysql_jbpm_rundeck_master configuration
+    apt: pkg={{ item }} state=installed
+    with_items:
+      - coreutils=8.21-1ubuntu5.1
+      - python-mysqldb=1.2.3-2ubuntu1
+      - mysql-server-5.5
+      - nfs-kernel-server=1:1.2.8-6ubuntu1.2
+
+  - name: allow root access to any hosts
+    mysql_user:  
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}" 
+     name: root 
+     password: "{{ jbpm_rundeck_mysql_root_password }}" 
+     host: '%' 
+     check_implicit_admin: yes 
+     priv: "*.*:ALL,GRANT" 
+
+  - name: allow root access to localhost
+    mysql_user:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: root
+     password: "{{ jbpm_rundeck_mysql_root_password }}"
+     host: localhost
+     check_implicit_admin: yes
+     priv: "*.*:ALL,GRANT"
+
+  - name: Create a new jbpm & rundeck databases
+    mysql_db: 
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: "{{ item }}"
+     state: present
+    with_items:
+     - jbpm
+     - rundeck
+
+  - name: Ensure MySQL users required for jbpm & rundeck DB access are present.
+    mysql_user: 
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: "{{ item.name }}"
+     host: "{{ item.host }}"
+     priv: "{{ item.priv }}"
+     password: "{{ item.password }}"
+     state: present
+    with_items: jbpm_rundeck_mysql_users
+
+  - name: ensure anonymous users are not present in the database
+    mysql_user:  
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: '' 
+     state: absent
+
+  - name: ensure passwordless root users are not present in the database
+    mysql_user:
+     login_user: root
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}"
+     name: root
+     password: ''
+     state: absent
+
+  - name: modify my.cnf parameters using template 
+    template: src=mysql_jbpm_rundeck_master_my.cnf.j2 dest=/etc/mysql/my.cnf backup=yes
+    notify: restart mysql
+
+  - name: Enable Replication on mysql_jbpm_rundeck_master host
+    mysql_user: 
+     login_user: root 
+     login_password: "{{ jbpm_rundeck_mysql_root_password }}" 
+     name: "{{ jbpm_rundeck_mysql_slave_user }}" 
+     host: '%' 
+     password: "{{ jbpm_rundeck_mysql_slave_password }}" 
+     priv: "*.*:ALL,GRANT" 
+     state: present
+
+  - name: restart nfs on mysql_jbpm_rundeck_master 
+    template: src=exports.j2 dest=/etc/exports backup=yes
+    notify: restart nfs
+   

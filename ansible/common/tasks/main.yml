@@ -1,0 +1,10 @@
+---
+
+  - name: copy ssh public key to remote host
+    authorized_key:
+     user: "{{ ansible_ssh_user }}" 
+     key: "{{ lookup ('file', '/home/' + ansible_ssh_user + '/.ssh/id_rsa.pub') }}"
+     state: present
+    
+  - name: apt update
+    apt: update_cache=yes

@@ -1,0 +1,39 @@
+---
+# 1. Below playbook performs haproxy master server configuration.
+# 2. No manual changes are required in this playbook
+# 3. all variables in this playbook reffers to /etc/ansible/main.yml - this playbook does below tasks
+# 4. install haproxy and keepalived on remote lb master for HA.
+# 5. modify /etc/sysctl.conf on remote lb master
+# 6. create directory /etc/haproxy/ssl/ and copy ssl crt file on remote lb master
+# 7. copy haproxy.cfg and keepalived.cfg templates on remote lb master
+# 8. start haproxy and keepalived on remote lb master
+
+ - name: add haproxy 1.5 ppa
+   action: apt_repository repo=ppa:vbernat/haproxy-1.5 update_cache=yes state=present
+
+ - name: install haproxy coreutils=8.21 & haproxy=1.5.15 & keepalived=1:1.2.7 packages required for haproxy server configuration.
+   apt: pkg={{ item }} state=installed
+   with_items:
+      - coreutils=8.21-1ubuntu5.1
+      - haproxy=1.5.15-1ppa1~trusty
+      - keepalived=1:1.2.7-1ubuntu1
+
+ - name: Enable ipv4 nonlocal binding  
+   lineinfile: dest=/etc/sysctl.conf line="net.ipv4.ip_nonlocal_bind=1" state=present
+
+ - name: apply sysctl changes
+   command: sysctl -p
+
+ - name: create ssl directory and copy server.pem 
+   file: path=/etc/haproxy/ssl/ owner=haproxy group=haproxy state=directory
+
+ - name: copy server.pm to haproxy
+   copy: src=server.pem dest="/etc/haproxy/ssl/"
+
+ - name: modify haproxy parameters - active
+   template: src=haproxy_active.cfg.j2 dest=/etc/haproxy/haproxy.cfg backup=yes
+   notify: restart haproxy
+
+ - name: modify keepalived parameters - active
+   template: src=keepalived_active.conf.j2 dest=/etc/keepalived/keepalived.conf 
+   notify: restart keepalived
